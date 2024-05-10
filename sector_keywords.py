@@ -472,6 +472,17 @@ sector_keywords = {
         "recruitment administration": 0.4,
         "recruitment operations": 0.5,
     },
+    "Aerospace": {  # Added new sector
+        "aerospace": 1,
+        "space": 0.7,
+        "spacecraft": 0.6,
+        "space industry": 0.5,
+        "space services": 0.6,
+        "space technology": 0.7,
+        "space policy": 0.8,
+        "space administration": 0.7,
+        "space operations": 0.6,
+    },
     "Unmatched": {},  # Dynamic catch-all category for unmatched keywords
 }
 
