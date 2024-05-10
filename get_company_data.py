@@ -39,4 +39,3 @@ def get_company_data():
                 data.append({'Name': link.text, 'Website': website, 'Sector': sector})
 
     return pd.DataFrame(data)
-    return pd.DataFrame(data)
