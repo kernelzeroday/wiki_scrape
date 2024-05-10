@@ -3,11 +3,12 @@ from nltk.tokenize import word_tokenize
 from collections import defaultdict
 import logging
 from sector_keywords import sector_keywords
+import asyncio
 
 # NLP setup
 nltk.download('punkt')
 
-def deduce_sector(text):
+async def deduce_sector(text, precomputed_scores=None):
     words = word_tokenize(text.lower())
     sector_scores = {sector: 0 for sector in sector_keywords}
     unmatched_words = defaultdict(int)
@@ -41,3 +42,7 @@ def deduce_sector(text):
     logging.info(f"Sectors matched based on keywords: {matched_sectors}")
     return matched_sectors if matched_sectors else ["Unmatched"]
 
+if __name__ == "__main__":
+    # Example usage
+    text = "This is an example text related to the Technology sector."
+    asyncio.run(deduce_sector(text))

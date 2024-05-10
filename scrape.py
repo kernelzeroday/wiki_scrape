@@ -1,12 +1,12 @@
+import asyncio
+import concurrent.futures
 import logging
 import pandas as pd
 from get_company_data import get_company_data
 import json
-import requests
+import aiohttp
 from bs4 import BeautifulSoup
 from tqdm import tqdm
-import concurrent.futures
-
 from sector_keywords import sector_keywords
 
 # Setup logging
@@ -19,112 +19,126 @@ logging.getLogger().addHandler(console_handler)
 def group_by_sector(df):
     return df.groupby('Sector')
 
-def validate_website(url):
+async def validate_website(url, max_depth=5, current_depth=0):
     try:
-        response = requests.head(url, allow_redirects=True)
-        if response.ok or response.status_code == 403:  # Check for status code being 200-399 or 403
-            return url, True
-        else:
-            logging.warning(f"Invalid website URL: {url} (status code {response.status_code})")
-            return url, False
-    except requests.exceptions.RequestException as e:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.head(url, headers=headers, allow_redirects=True) as response:
+                if response.status == 200 or response.status == 403:
+                    return url, True
+                else:
+                    logging.warning(f"Invalid website URL: {url} (status code {response.status})")
+                    return url, False
+    except aiohttp.ClientError as e:
         logging.error(f"Error validating website URL: {url} - {e}")
         return url, False
 
-def search_company_website_wikipedia(company_name):
-    """
-    Search for a company website using Wikipedia.
-    """
+async def search_company_website_wikipedia(company_name, max_depth=5, current_depth=0):
+    if current_depth >= max_depth:
+        logging.warning(f"Maximum recursion depth reached for {company_name}")
+        return company_name, None
+
     search_url = f"https://en.wikipedia.org/w/index.php?search={company_name}"
     try:
-        response = requests.get(search_url)
-        if response.ok:  # Simplified check for response status code being 200-399
-            soup = BeautifulSoup(response.text, 'html.parser')
-            link = soup.find('a', href=True, text='Official website')
-            if link:
-                website_url = link['href']
-                return company_name, website_url
-            else:
-                logging.warning(f"No official website link found on Wikipedia for {company_name}")
-                return company_name, None
-        else:
-            logging.warning(f"Failed to retrieve company information from Wikipedia (status code {response.status_code})")
-            return company_name, None
-    except requests.exceptions.RequestException as e:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.get(search_url, headers=headers) as response:
+                if response.status == 200:
+                    soup = BeautifulSoup(await response.text(), 'html.parser')
+                    link = soup.find('a', href=True, text='Official website')
+                    if link:
+                        website_url = link['href']
+                        return company_name, website_url
+                    else:
+                        logging.warning(f"No official website link found on Wikipedia for {company_name}")
+                        return company_name, None
+                else:
+                    logging.warning(f"Failed to retrieve company information from Wikipedia (status code {response.status})")
+                    return company_name, None
+    except aiohttp.ClientError as e:
         logging.error(f"Error searching for company website on Wikipedia: {e}")
         return company_name, None
 
-def parse_redirected_page_content(url):
-    """
-    Parse the content of the redirected page and extract relevant information.
-    """
+async def parse_redirected_page_content(url, max_depth=5, current_depth=0):
+    if current_depth >= max_depth:
+        logging.warning(f"Maximum recursion depth reached for {url}")
+        return None
+
     try:
-        response = requests.get(url)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, 'html.parser')
-            return soup
-        else:
-            logging.warning(f"Failed to retrieve page content from {url} (status code {response.status_code})")
-            return None
-    except requests.exceptions.RequestException as e:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as response:
+                if response.status == 200:
+                    soup = BeautifulSoup(await response.text(), 'html.parser')
+                    return soup
+                else:
+                    logging.warning(f"Failed to retrieve page content from {url} (status code {response.status})")
+                    return None
+    except aiohttp.ClientError as e:
         logging.error(f"Error retrieving page content from {url} - {e}")
         return None
 
 def log_classification_data(keywords, weights, correct):
-    # Log the classification data for future model training
     logging.info(f"Classification data: keywords={keywords}, weights={weights}, correct={correct}")
 
-df = get_company_data()
-if df.empty:
-    logging.error("No data retrieved.")
-else:
-    grouped_data = group_by_sector(df)
-    report_text = ""
-    report_json = {}
-    for name, group in tqdm(grouped_data, desc="Processing sectors", unit="sector"):
-        sector_details = {'Companies': []}
-        with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
-            # Validate websites
-            future_to_url = {executor.submit(validate_website, row.Website): row for row in group.itertuples()}
-            for future in concurrent.futures.as_completed(future_to_url):
-                row = future_to_url[future]  # Define row from future_to_url mapping
-                url, is_valid = future.result()
+async def process_sector(sector_name, sector_group):
+    sector_details = {'Sector': sector_name, 'Companies': []}
+    for row in sector_group.itertuples():
+        url, is_valid = await validate_website(row.Website)
+        if not is_valid:
+            logging.warning(f"Skipping company {row.Name} due to invalid website URL: {url}")
+            company_name, website_url = await search_company_website_wikipedia(row.Name)
+            if website_url:
+                url, is_valid = await validate_website(website_url)
                 if not is_valid:
-                    logging.warning(f"Skipping company {row.Name} due to invalid website URL: {url}")
+                    logging.warning(f"Skipping company {row.Name} due to invalid website URL after Wikipedia search: {website_url}")
                     continue
-                company_info = {'Name': row.Name, 'Website': url}
-                if not is_valid:
-                    # Search for the website using Wikipedia
-                    company_name, website_url = executor.submit(search_company_website_wikipedia, row.Name).result()
-                    if website_url:
-                        company_info['Website'] = website_url
-                    else:
-                        logging.warning(f"Skipping company {row.Name} due to invalid website URL: {row.Website}")
-                        continue
-                if validate_website(company_info['Website'])[1]:
-                    # Parse the content of the redirected page
-                    page_content = parse_redirected_page_content(company_info['Website'])
-                    if page_content:
-                        pass
-                    sector_details['Companies'].append(company_info)
-                else:
-                    logging.warning(f"Skipping company {row.Name} due to invalid website URL: {company_info['Website']}")
-                # Log the classification data
-                keywords = [{'keyword': key, 'weight': value} for sector in sector_keywords.values() for key, value in sector.items()]
-                weights = [keyword['weight'] for keyword in keywords]
-                correct = True  # Assume correct classification for now
-                log_classification_data(keywords, weights, correct)
-        report_json[name] = sector_details
-        sector_info = f"Sector: {name}\n"
-        for company in sector_details['Companies']:
-            sector_info += f"Name: {company['Name']}, Website: {company['Website']}\n"
-        report_text += sector_info
-    try:
-        with open('sector_report.txt', 'w') as text_file:
-            text_file.write(report_text)
-        with open('sector_report.json', 'w') as json_file:
-            json.dump(report_json, json_file, indent=4)
-        logging.info("Reports generated in both text and JSON formats.")
-    except Exception as e:
-        logging.error(f"Error writing reports: {e}")
+            else:
+                continue
+        company_info = {'Name': row.Name, 'Website': url}
+        sector_details['Companies'].append(company_info)
+    return sector_details
+
+async def main():
+    logging.info("Starting main function")
+    df = await get_company_data()
+    print("Data fetched", df.head())
+    if df.empty:
+        logging.error("No data retrieved.")
+    else:
+        logging.info("Data retrieved successfully")
+        grouped_data = group_by_sector(df)
+        logging.info("Data grouped by sector")
+        report_text = ""
+        report_json = {}
+
+        # Prepare a list of coroutines for asyncio.gather
+        tasks = [process_sector(name, group) for name, group in grouped_data]
+        sector_details_list = await asyncio.gather(*tasks)
+
+        for sector_details in sector_details_list:
+            logging.info(f"Processed sector: {sector_details['Sector']}")
+            report_json[sector_details['Sector']] = sector_details
+            sector_info = f"Sector: {sector_details['Sector']}\n"
+            for company in sector_details['Companies']:
+                sector_info += f"Name: {company['Name']}, Website: {company['Website']}\n"
+            report_text += sector_info
+
+        try:
+            with open('sector_report.txt', 'w') as text_file:
+                text_file.write(report_text)
+            with open('sector_report.json', 'w') as json_file:
+                json.dump(report_json, json_file, indent=4)
+            logging.info("Reports generated in both text and JSON formats.")
+        except Exception as e:
+            logging.error(f"Error writing reports: {e}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
 
