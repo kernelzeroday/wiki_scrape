@@ -4,6 +4,7 @@ from get_company_data import get_company_data
 import json
 import requests
 from bs4 import BeautifulSoup
+from tqdm import tqdm
 
 from sector_keywords import sector_keywords
 
@@ -16,6 +17,7 @@ logging.getLogger().addHandler(console_handler)
 
 def group_by_sector(df):
     return df.groupby('Sector')
+
 def validate_website(url):
     try:
         response = requests.head(url, allow_redirects=True)
@@ -54,6 +56,7 @@ def search_company_website_wikipedia(company_name):
     except requests.exceptions.RequestException as e:
         logging.error(f"Error searching for company website on Wikipedia: {e}")
         return None
+
 def parse_redirected_page_content(url):
     """
     Parse the content of the redirected page and extract relevant information.
@@ -77,9 +80,9 @@ else:
     grouped_data = group_by_sector(df)
     report_text = ""
     report_json = {}
-    for name, group in grouped_data:
+    for name, group in tqdm(grouped_data, desc="Processing sectors", unit="sector"):
         sector_details = {'Companies': []}
-        for _, row in group.iterrows():
+        for _, row in tqdm(group.iterrows(), desc=f"Processing companies in sector {name}", unit="company"):
             company_info = {'Name': row['Name'], 'Website': row['Website']}
             if not validate_website(row['Website']):
                 # Search for the website using Wikipedia
@@ -105,7 +108,6 @@ else:
         sector_info = f"Sector: {name}\n"
         for company in sector_details['Companies']:
             sector_info += f"Name: {company['Name']}, Website: {company['Website']}\n"
-        print(sector_info)
         report_text += sector_info
     try:
         with open('sector_report.txt', 'w') as text_file:
