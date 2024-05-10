@@ -83,10 +83,11 @@ else:
     report_json = {}
     for name, group in tqdm(grouped_data, desc="Processing sectors", unit="sector"):
         sector_details = {'Companies': []}
-        with concurrent.futures.ThreadPoolExecutor() as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
             # Validate websites
             future_to_url = {executor.submit(validate_website, row.Website): row for row in group.itertuples()}
             for future in concurrent.futures.as_completed(future_to_url):
+                row = future_to_url[future]  # Define row from future_to_url mapping
                 url, is_valid = future.result()
                 if not is_valid:
                     logging.warning(f"Skipping company {row.Name} due to invalid website URL: {url}")
